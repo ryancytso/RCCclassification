@@ -1,0 +1,314 @@
+---
+title: "RCC Exploratory Code"
+author: "Ryan Tso"
+date: "`r Sys.Date()`"
+output: html_document
+overview: "This script generates individual decision trees (DTs) for each of the main diagnostic RCC categories based on the synthetic dataset (created in RCC_synthetic_data_creation_07.23.2025)"
+---
+
+# 1. Setup
+
+## 1.1 Load packages
+
+```{r}
+# Load required packages
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(rattle)
+library(dplyr)
+```
+
+## 1.2 Set WD
+
+```{r}
+#setwd("C:/Users/avasl/OneDrive/Desktop/Consulting/RCC Project")
+setwd("/Users/ryantso/Desktop/RCC_Code")
+
+```
+
+## 1.3 Data Import
+
+```{r}
+RCC = read.csv("RCC_revised_synthetic_modelling_07.23.25.csv", header=T, stringsAsFactors = F)
+dim(RCC) #580  55
+colnames(RCC)
+```
+
+# 2. Modify and Explore Data
+
+## 2.1 Rename and Subset
+
+```{r}
+# See how many subtypes & categories exist 
+table(RCC$Subtype) #note that all are 20 except Papillary renal cell carcinoma (n=60) and TFE3-rearranged renal cell carcinoma (n=40) as they are diagnoses that show up in multiple categories
+
+# table(RCC$Category)
+
+# Abbreviate all subtype names so that they will fit easier on plots
+table(RCC$Subtype)
+
+RCC$Subtype <- replace(RCC$Subtype, RCC$Subtype=="Acquired Cystic Disease-Associated RCC", "Acquired Cystic")
+RCC$Subtype <- replace(RCC$Subtype, RCC$Subtype=="ALK-rearranged renal cell carcinoma", "ALK-rearranged RCC")
+RCC$Subtype <- replace(RCC$Subtype, RCC$Subtype=="Chromophobe renal cell carcinoma", "Chromophobe RCC")
+RCC$Subtype <- replace(RCC$Subtype, RCC$Subtype=="Clear cell papillary renal cell tumour", "CC Papillary RCT")
+RCC$Subtype <- replace(RCC$Subtype, RCC$Subtype=="Clear cell renal cell carcinoma", "CC RCC")
+RCC$Subtype <- replace(RCC$Subtype, RCC$Subtype=="ELOC-mutated renal cell carcinoma / Renal cell carcinoma with fibromyomatous stroma", "ELOC-mut RCC/ fibromyomatous stroma")
+RCC$Subtype <- replace(RCC$Subtype, RCC$Subtype=="Eosinophilic solid and cystic renal cell carcinoma", "Eosin solid + cystic RCC")
+RCC$Subtype <- replace(RCC$Subtype, RCC$Subtype=="Eosinophilic vacuolated tumour", "Eosinophilic vacuolated")
+RCC$Subtype <- replace(RCC$Subtype, RCC$Subtype=="Fumarate hydratase-deficient renal cell carcinoma", "FH- RCC")
+RCC$Subtype <- replace(RCC$Subtype, RCC$Subtype=="Low-grade oncocytic tumour", "LG oncocytic")
+RCC$Subtype <- replace(RCC$Subtype, RCC$Subtype=="Mucinous tubular and spindle cell carcinoma", "Mucinous tubular + spindle cell")
+RCC$Subtype <- replace(RCC$Subtype, RCC$Subtype=="Multilocular cystic renal neoplasm of low malignant potential", "Multiocular cystic LMP")
+RCC$Subtype <- replace(RCC$Subtype, RCC$Subtype=="SMARCB1-deficient Renal Medullary Carcinoma", "SMARCB1- Renal Medullary")
+RCC$Subtype <- replace(RCC$Subtype, RCC$Subtype=="TFE3-rearranged renal cell carcinoma", "TFE3-rearranged RCC")
+RCC$Subtype <- replace(RCC$Subtype, RCC$Subtype=="TFEB-rearranged renal cell carcinoma", "TFEB-rearranged RCC")
+RCC$Subtype <- replace(RCC$Subtype, RCC$Subtype=="TFEB-amplified renal cell carcinoma", "TFEB-amp RCC")
+RCC$Subtype <- replace(RCC$Subtype, RCC$Subtype=="Succinate dehydrogenase-deficient renal cell carcinoma", "SDH- RCC")
+RCC$Subtype <- replace(RCC$Subtype, RCC$Subtype=="Papillary renal neoplasm with reverse polarity", "Pap RN w reverse polarity")
+
+table(RCC$Subtype) #check modified column names
+
+# Create option of numeric df (0/1 instead of Yes/No or +/-)
+RCCnum <- RCC
+RCCnum[, 4:55] <- ifelse(RCCnum[, 4:55] == "Yes" | RCCnum[, 4:55] == "(+)", 1, 0) 
+```
+
+# 3. Trees
+
+## 3.1 Margins
+
+```{r}
+par(mar=c(0.2, 0.2, 2, 0.2))  # Reduce margins (bottom, left, top, right)
+```
+
+## 3.2 Subset for Individual Trees
+
+```{r}
+# Assign correct df to RCCmodel for next steps
+RCCmodel <- RCC #or RCCnum if needed
+
+unique(RCCmodel$Subtype) #25
+unique(RCCmodel$Category) #5
+
+# Create subsets based on each category (with multiple possible subtype diagnoses)
+CC <- subset(RCCmodel, Category=="RCC with clear cells")
+pap <- subset(RCCmodel, Category=="RCC with low-grade papillary lesion" | Category=="RCC with high-grade papillary lesion")
+LGpap <- subset(RCCmodel, Category=="RCC with low-grade papillary lesion")
+HGpap <- subset(RCCmodel, Category=="RCC with high-grade papillary lesion")
+Eosin <- subset(RCCmodel, Category=="RCC with eosinophilic cells")
+Infil <- subset(RCCmodel, Category=="RCC with infiltrative pattern")
+```
+
+## 3.3 Clear Cell Tree
+
+```{r}
+# Remove the categorical classification variables
+colnames(CC)
+CC_red <- CC[,c(3:30)] #can modify here if you do not want to include the IHC variables
+CC_redIHC <- CC[,c(3:55)] #with IHC
+
+# Check the class distribution
+table(CC_red$Subtype)  #should show counts for all 4 classes
+
+#Note, the code to build and plot the trees are written only once below, but should be run separately for including or excluding IHC. Make sure to change df input and plot titles for each of the plots
+
+# Examine the very basic rpart model
+fit <- rpart(Subtype ~ ., data=CC_red, method="class")
+print(fit)  #look at the full model details
+printcp(fit)  #look at complexity parameters
+
+# Rebuild tree with manual specifications, such as reducing minsplit and minbucket to consider splits and terminal nodes that only have 3 observations - this allows each subtype to be a terminal node
+fit_all_classes_CC <- rpart(Subtype ~ ., 
+                         data=CC_red, 
+                         method="class",
+                         control=rpart.control(
+                           cp=0.001, #very low complexity parameter
+                           minsplit=3, #allow splits with 3 obs
+                           minbucket=3  #allow terminal nodes with 3 obs
+                         ))
+
+# Plot the new tree
+rpart.plot(fit_all_classes_CC,
+           main="RCC with Clear Cells (including IHC) Classification Tree", #change
+           cex=0.6,
+           type=5, 
+           clip.right.labs=FALSE, #don't clip right labels
+           branch=0.5,       
+           fallen.leaves=TRUE, #terminal nodes at bottom
+           branch.lty=1,     #solid branch lines
+           box.palette=0,    #no color warnings
+           split.prefix="",  #no prefix text for splits
+           split.suffix="",  #no suffix text for splits
+           extra=0,          #no extra information in nodes
+           leaf.round=0,     #don't round leaves
+           roundint=FALSE,   #don't round integers
+           digits=0)         #no decimal places
+
+
+# Assess model performance:
+pred = as.factor(predict(fit_all_classes_CC, type="class"))
+table(pred, CC_red$Subtype) #basic table of performance
+confusionMatrix(pred, as.factor(CC_red$Subtype)) #proper confusion matrix including performance stats
+```
+
+##3.4 Papillary Trees
+
+```{r}
+# Remove the categorical classification variables
+colnames(LGpap)
+colnames(HGpap)
+
+LGpap_red <- LGpap[,c(3:15, 18:30)] #remove the categorical classification variables and LG/HG
+LGpap_redIHC <- LGpap[,c(3:15, 18:55)] #with IHC
+HGpap_red <- HGpap[,c(3:15, 18:30)] #remove the categorical classification variables and LG/HG
+HGpap_redIHC <- HGpap[,c(3:15, 18:55)] #with IHC
+
+# Check the class distribution
+table(LGpap_red$Subtype)  
+table(HGpap_red$Subtype)
+
+#Note, the code to build and plot the trees are written only once below, but should be run separately for LGpap_red, HGpap_red, with and without IHC, etc. Make sure to change df input and plot titles for each of the plots
+
+# Examine the very basic rpart model
+fit_pap <- rpart(Subtype ~ ., data=HGpap_red, method="class") #change data input if different subset
+print(fit_pap)  #look at the full model details
+printcp(fit_pap)  #look at complexity parameters
+
+# Rebuild tree with manual specifications, such as reducing minsplit and minbucket to consider splits and terminal nodes that only have 3 observations - this allows each subtype to be a terminal node
+fit_all_classes_pap <- rpart(Subtype ~ ., 
+                            data=HGpap_red, #change if different subset
+                            method="class",
+                            control=rpart.control(
+                              cp=0.01,  #very low complexity parameter
+                              minsplit=3, #allow splits with 3 obs
+                              minbucket=3  #allow terminal nodes with 3 obs
+                            ))
+
+# Plot the new tree
+rpart.plot(fit_all_classes_pap,
+           main="HG Papillary RCC (with IHC) Classification Tree", #change if different subset
+           cex=0.6,
+           type=5, 
+           clip.right.labs=FALSE, #don't clip right labels
+           branch=0.5,       
+           fallen.leaves=TRUE, #terminal nodes at bottom
+           branch.lty=1,     #solid branch lines
+           box.palette=0,    #no color warnings
+           split.prefix="",  #no prefix text for splits
+           split.suffix="",  #no suffix text for splits
+           extra=0,          #no extra information in nodes
+           leaf.round=0,     #don't round leaves
+           roundint=FALSE,   #don't round integers
+           digits=0)         #no decimal places
+
+# Assess model performance:
+pred = as.factor(predict(fit_all_classes_pap, type="class"))
+table(pred, HGpap_red$Subtype) #basic table of performance
+confusionMatrix(pred, as.factor(HGpap_red$Subtype))#proper confusion matrix including performance stats
+```
+
+## 3.5 Eosinophilic Trees
+
+```{r}
+# Remove the categorical classification variables
+colnames(Eosin)
+Eosin_red <- Eosin[,c(3:30)] #remove the categorical classification and IHC variables
+Eosin_redIHC <- Eosin[,c(3:55)] #remove the categorical classification variables
+
+# Check the class distribution
+table(Eosin_redIHC$Subtype) 
+
+#Note, the code to build and plot the trees are written only once below, but should be run separately for including or excluding IHC. Make sure to change df input and plot titles for each of the plots
+
+# Examine the basic rpart model
+fit <- rpart(Subtype ~ ., data=Eosin_redIHC, method="class")
+print(fit)  #look at the full model details
+printcp(fit)  #look at complexity parameters
+
+# Rebuild tree with manual specifications, such as reducing minsplit and minbucket to consider splits and terminal nodes that only have 3 observations - this allows each subtype to be a terminal node
+fit_all_classes_Eosin <- rpart(Subtype ~ ., 
+                         data=Eosin_redIHC,
+                         method="class",
+                         control=rpart.control(
+                           cp=0.001, #very low complexity parameter
+                           minsplit=3, #allow splits with 2 obs
+                           minbucket=3  #allow terminal nodes with 1 obs
+                         ))
+
+# Plot the unpruned tree
+rpart.plot(fit_all_classes_Eosin,
+           main="RCC with eosinophilic cells (with IHC) Classification Tree",
+           cex=0.6,
+           type=5, #put split info on branches
+           clip.right.labs=FALSE, #don't clip right labels
+           branch=0.5,       
+           fallen.leaves=TRUE, #terminal nodes at bottom
+           branch.lty=1,     #solid branch lines
+           box.palette=0,    #no color warnings
+           split.prefix="",  #no prefix text for splits
+           split.suffix="",  #no suffix text for splits
+           extra=0,          #no extra information in nodes
+           leaf.round=0,     #don't round leaves
+           roundint=FALSE,   #don't round integers
+           digits=0)         #no decimal places
+
+
+# Assess model performance:
+pred = as.factor(predict(fit_all_classes_Eosin, type="class"))
+table(pred, Eosin_redIHC$Subtype)#basic table of performance
+confusionMatrix(pred, as.factor(Eosin_red$Subtype)) #proper confusion matrix including performance stats
+
+```
+
+## 3.6 Infiltrative Trees
+
+```{r}
+# Subset
+colnames(Infil)
+Infil_red <- Infil[,c(3:30)] #remove the categorical classification variables
+Infil_redIHC <- Infil[,c(3:55)] #remove the categorical classification variables
+
+# Check the class distribution
+table(Infil_red$Subtype) 
+
+#Note, the code to build and plot the trees are written only once below, but should be run separately for including or excluding IHC. Make sure to change df input and plot titles for each of the plots
+
+# Examine the basic rpart model
+fit <- rpart(Subtype ~ ., data=Infil_redIHC, method="class")
+print(fit)  #look at the full model details
+printcp(fit)  #look at complexity parameters
+
+# Rebuild tree with manual specifications, such as reducing minsplit and minbucket to consider splits and terminal nodes that only have 3 observations - this allows each subtype to be a terminal node
+fit_all_classes_Infil <- rpart(Subtype ~ ., 
+                         data=Infil_redIHC,
+                         method="class",
+                         control=rpart.control(
+                           cp=0.001, #very low complexity parameter
+                           minsplit=3, #allow splits with 2 obs
+                           minbucket=3  #allow terminal nodes with 1 obs
+                         ))
+
+# Plot the unpruned tree
+rpart.plot(fit_all_classes_Infil,
+           main="RCC with infiltrative pattern (with IHC) Classification Tree",
+           cex=0.6,
+           type=5, # put split info on branches
+           clip.right.labs=FALSE, #don't clip right labels
+           branch=0.5,       
+           fallen.leaves=TRUE, #terminal nodes at bottom
+           branch.lty=1,     #solid branch lines
+           box.palette=0,    #no color warnings
+           split.prefix="",  #no prefix text for splits
+           split.suffix="",  #no suffix text for splits
+           extra=0,          #no extra information in nodes
+           leaf.round=0,     #don't round leaves
+           roundint=FALSE,   #don't round integers
+           digits=0)         #no decimal places
+
+
+# Assess model performance:
+pred = as.factor(predict(fit_all_classes_Infil, type="class"))
+table(pred, Infil_red$Subtype) #basic table of performance
+confusionMatrix(pred, as.factor(Infil_redIHC$Subtype)) #proper confusion matrix including performance stats
+```
