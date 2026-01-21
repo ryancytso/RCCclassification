@@ -2,7 +2,6 @@ import numpy as np
 from collections import Counter
 from treenode import TreeNode
 
-
 class DecisionTree():
     """
     Decision Tree Classifier with Rule-Based Feature Gating for RCC Subtype Classification
@@ -10,8 +9,11 @@ class DecisionTree():
     Predicting: Use "predict" function with test set features
     """
 
-    def __init__(self, max_depth=4, min_samples_leaf=1, 
-                 min_information_gain=0.0, numb_of_features_splitting=None,
+    def __init__(self, 
+                 max_depth=4, 
+                 min_samples_leaf=1, 
+                 min_information_gain=0.0, 
+                 numb_of_features_splitting=None,
                  amount_of_say=None,
                  morphological_depth=None,
                  morphological_features=None,
@@ -239,10 +241,16 @@ class DecisionTree():
         """
         Trains the model with given X and Y datasets
         """
+        # Build label encodings so it works with strings or ints
+        unique = np.unique(Y_train)
+        self.label_to_int = {lab: i for i, lab in enumerate(unique)}
+        self.int_to_label = {i: lab for lab, i in self.label_to_int.items()}
+
+        Y_enc = np.array([self.label_to_int[y] for y in Y_train], dtype=int)
 
         # Concat features and labels
         self.labels_in_train = np.unique(Y_train)
-        train_data = np.concatenate((X_train, np.reshape(Y_train, (-1, 1))), axis=1)
+        train_data = np.concatenate((X_train, Y_enc.reshape((-1, 1))), axis=1)
 
         # Start creating the tree
         self.tree = self._create_tree(data=train_data, current_depth=0)
@@ -250,6 +258,7 @@ class DecisionTree():
         # Calculate feature importance
         self.feature_importances = dict.fromkeys(range(X_train.shape[1]), 0)
         self._calculate_feature_importance(self.tree)
+
         # Normalize the feature importance values
         total_importance = sum(self.feature_importances.values())
         if total_importance > 0:
@@ -264,11 +273,13 @@ class DecisionTree():
 
     def predict(self, X_set: np.array) -> np.array:
         """Returns the predicted labels for a given data set"""
+        pred_int = np.argmax(self.predict_proba(X_set), axis=1)
 
-        pred_probs = self.predict_proba(X_set)
-        preds = np.argmax(pred_probs, axis=1)
+        # if mapping exists, return original string labels
+        if hasattr(self, "int_to_label"):
+            return np.array([self.int_to_label[i] for i in pred_int], dtype=object)
         
-        return preds    
+        return pred_int 
         
     def _print_recursive(self, node: TreeNode, level=0) -> None:
         if node != None:

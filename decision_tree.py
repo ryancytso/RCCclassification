@@ -2,7 +2,6 @@ import numpy as np
 from collections import Counter
 from treenode import TreeNode
 
-
 class DecisionTree():
     """
     Decision Tree Classifier
@@ -10,8 +9,11 @@ class DecisionTree():
     Predicting: Use "predict" function with test set features
     """
 
-    def __init__(self, max_depth=4, min_samples_leaf=1, 
-                 min_information_gain=0.0, numb_of_features_splitting=None,
+    def __init__(self, 
+                 max_depth=4, 
+                 min_samples_leaf=1, 
+                 min_information_gain=0.0, 
+                 numb_of_features_splitting=None,
                  amount_of_say=None) -> None:
         """
         Setting the class with hyperparameters
