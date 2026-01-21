@@ -2,6 +2,7 @@ import numpy as np
 from collections import Counter
 from treenode import TreeNode
 
+
 class DecisionTree():
     """
     Decision Tree Classifier with Rule-Based Feature Gating for RCC Subtype Classification
@@ -71,8 +72,9 @@ class DecisionTree():
         """
         Returns the two most common labels in the data
         Returns: (most_common_label, second_most_common_label)
+        Works with both categorical and integer labels
         """
-        labels = data[:, -1].astype(int)
+        labels = data[:, -1]
         label_counts = Counter(labels)
         
         if len(label_counts) == 0:
@@ -169,18 +171,20 @@ class DecisionTree():
         return g1_min, g2_min, min_entropy_feature_idx, min_entropy_feature_val, min_part_entropy
 
     def _find_label_probs(self, data: np.array) -> np.array:
-
-        labels_as_integers = data[:,-1].astype(int)
+        # Get labels from data (could be strings or integers)
+        labels = data[:, -1]
+        
         # Calculate the total number of labels
-        total_labels = len(labels_as_integers)
+        total_labels = len(labels)
         # Calculate the ratios (probabilities) for each label
         label_probabilities = np.zeros(len(self.labels_in_train), dtype=float)
 
         # Populate the label_probabilities array based on the specific labels
         for i, label in enumerate(self.labels_in_train):
-            label_index = np.where(labels_as_integers == i)[0]
-            if len(label_index) > 0:
-                label_probabilities[i] = len(label_index) / total_labels
+            # Count occurrences of this label
+            label_count = np.sum(labels == label)
+            if label_count > 0:
+                label_probabilities[i] = label_count / total_labels
 
         return label_probabilities
 
@@ -240,17 +244,17 @@ class DecisionTree():
     def train(self, X_train: np.array, Y_train: np.array) -> None:
         """
         Trains the model with given X and Y datasets
+        Handles both categorical (string) and integer labels
         """
-        # Build label encodings so it works with strings or ints
-        unique = np.unique(Y_train)
-        self.label_to_int = {lab: i for i, lab in enumerate(unique)}
-        self.int_to_label = {i: lab for lab, i in self.label_to_int.items()}
-
-        Y_enc = np.array([self.label_to_int[y] for y in Y_train], dtype=int)
-
-        # Concat features and labels
+        # Store unique labels and create label mapping
         self.labels_in_train = np.unique(Y_train)
-        train_data = np.concatenate((X_train, Y_enc.reshape((-1, 1))), axis=1)
+        
+        # Create a mapping from original labels to integer indices
+        self.label_to_idx = {label: idx for idx, label in enumerate(self.labels_in_train)}
+        self.idx_to_label = {idx: label for label, idx in self.label_to_idx.items()}
+        
+        # Concat features and labels (keep original label format)
+        train_data = np.concatenate((X_train, np.reshape(Y_train, (-1, 1))), axis=1)
 
         # Start creating the tree
         self.tree = self._create_tree(data=train_data, current_depth=0)
@@ -272,14 +276,15 @@ class DecisionTree():
         return pred_probs
 
     def predict(self, X_set: np.array) -> np.array:
-        """Returns the predicted labels for a given data set"""
-        pred_int = np.argmax(self.predict_proba(X_set), axis=1)
+        """Returns the predicted labels for a given data set in original label format"""
 
-        # if mapping exists, return original string labels
-        if hasattr(self, "int_to_label"):
-            return np.array([self.int_to_label[i] for i in pred_int], dtype=object)
+        pred_probs = self.predict_proba(X_set)
+        pred_indices = np.argmax(pred_probs, axis=1)
         
-        return pred_int 
+        # Convert indices back to original labels
+        preds = np.array([self.labels_in_train[idx] for idx in pred_indices])
+        
+        return preds    
         
     def _print_recursive(self, node: TreeNode, level=0) -> None:
         if node != None:
@@ -287,8 +292,29 @@ class DecisionTree():
             print('    ' * 4 * level + '-> ' + node.node_def())
             self._print_recursive(node.right, level + 1)
 
-    def print_tree(self) -> None:
+    #def print_tree(self) -> None:
+        #self._print_recursive(node=self.tree)
+
+    def print_tree(self, feature_names=None) -> None:
+        """
+        Print the decision tree in a readable format
+        
+        Parameters:
+        -----------
+        feature_names : list, optional
+            List of feature names for better readability
+        """
+        if feature_names is not None:
+            self.feature_names = feature_names
+            
+        else:
+            self.feature_names = None
+            
+        print("\n" + "="*80)
+        print("DECISION TREE STRUCTURE")
+        print("="*80 + "\n")
         self._print_recursive(node=self.tree)
+        print("\n" + "="*80 + "\n")
 
     def _calculate_feature_importance(self, node):
         """Calculates the feature importance by visiting each node in the tree recursively"""
@@ -321,3 +347,134 @@ class DecisionTree():
             self._collect_feature_usage(node.left, depth + 1, report)
         if node.right:
             self._collect_feature_usage(node.right, depth + 1, report)
+
+    # End of actual tree features, below features are for visualization and analysis
+    def get_tree_summary(self) -> dict:
+        """
+        Returns a comprehensive summary of the tree including:
+        - Tree depth
+        - Number of leaves
+        - Feature usage statistics
+        - Class distribution at leaves
+        """
+        summary = {
+            'max_depth_reached': 0,
+            'num_leaves': 0,
+            'num_internal_nodes': 0,
+            'leaf_class_distributions': [],
+            'feature_usage_count': {},
+            'samples_per_depth': {}
+        }
+        
+        self._analyze_tree(self.tree, 0, summary)
+        
+        return summary
+    
+    def _analyze_tree(self, node, depth, summary):
+        """Helper function to analyze tree structure"""
+        if node is None:
+            return
+        
+        # Update max depth
+        summary['max_depth_reached'] = max(summary['max_depth_reached'], depth)
+        
+        # Track samples per depth
+        if depth not in summary['samples_per_depth']:
+            summary['samples_per_depth'][depth] = 0
+        summary['samples_per_depth'][depth] += len(node.data)
+        
+        # Check if leaf
+        is_leaf = (node.left is None and node.right is None)
+        
+        if is_leaf:
+            summary['num_leaves'] += 1
+            # Store leaf information
+            pred_class_idx = np.argmax(node.prediction_probs)
+            pred_class = self.labels_in_train[pred_class_idx]
+            summary['leaf_class_distributions'].append({
+                'predicted_class': pred_class,
+                'probabilities': dict(zip(self.labels_in_train, node.prediction_probs)),
+                'num_samples': len(node.data)
+            })
+        else:
+            summary['num_internal_nodes'] += 1
+            # Track feature usage
+            if node.feature_idx >= 0:
+                if node.feature_idx not in summary['feature_usage_count']:
+                    summary['feature_usage_count'][node.feature_idx] = 0
+                summary['feature_usage_count'][node.feature_idx] += 1
+        
+        # Recurse on children
+        if node.left:
+            self._analyze_tree(node.left, depth + 1, summary)
+        if node.right:
+            self._analyze_tree(node.right, depth + 1, summary)
+    
+    def print_summary(self, feature_names=None):
+        """
+        Print a comprehensive summary of the decision tree
+        """
+        summary = self.get_tree_summary()
+        
+        print("\n" + "="*80)
+        print("DECISION TREE SUMMARY")
+        print("="*80)
+        print(f"\nTree Depth: {summary['max_depth_reached']}")
+        print(f"Number of Leaves: {summary['num_leaves']}")
+        print(f"Number of Internal Nodes: {summary['num_internal_nodes']}")
+        
+        print("\n" + "-"*80)
+        print("FEATURE IMPORTANCE (normalized)")
+        print("-"*80)
+        sorted_features = sorted(self.feature_importances.items(), 
+                                key=lambda x: x[1], reverse=True)
+        for feat_idx, importance in sorted_features[:10]:  # Top 10
+            if importance > 0:
+                feat_name = f"Feature[{feat_idx}]"
+                if feature_names and feat_idx < len(feature_names):
+                    feat_name = feature_names[feat_idx]
+                print(f"  {feat_name:30s}: {'█' * int(importance * 50)}{importance:.4f}")
+        
+        print("\n" + "-"*80)
+        print("FEATURE USAGE IN TREE")
+        print("-"*80)
+        sorted_usage = sorted(summary['feature_usage_count'].items(), 
+                             key=lambda x: x[1], reverse=True)
+        for feat_idx, count in sorted_usage[:10]:  # Top 10
+            feat_name = f"Feature[{feat_idx}]"
+            if feature_names and feat_idx < len(feature_names):
+                feat_name = feature_names[feat_idx]
+            print(f"  {feat_name:30s}: Used {count} times")
+        
+        print("\n" + "-"*80)
+        print("LEAF NODE CLASS DISTRIBUTIONS")
+        print("-"*80)
+        class_counts = {}
+        for leaf in summary['leaf_class_distributions']:
+            pred_class = leaf['predicted_class']
+            if pred_class not in class_counts:
+                class_counts[pred_class] = 0
+            class_counts[pred_class] += 1
+        
+        for class_name, count in sorted(class_counts.items(), key=lambda x: x[1], reverse=True):
+            print(f"  {class_name:30s}: {count} leaf nodes")
+        
+        if self.use_feature_gating:
+            print("\n" + "-"*80)
+            print("FEATURE GATING INFORMATION")
+            print("-"*80)
+            print(f"  Morphological Depth: {self.morphological_depth}")
+            print(f"  Morphological Features: {len(self.morphological_features)} features")
+            print(f"  IHC Feature Map: {len(self.ihc_feature_map)} subtypes configured")
+            
+            usage_report = self.get_feature_usage_report()
+            print("\n  Feature Usage by Depth:")
+            for depth in sorted(usage_report.keys()):
+                features_used = set(usage_report[depth])
+                print(f"    Depth {depth}: {len(features_used)} unique features used")
+                if depth <= self.morphological_depth:
+                    print(f"              (Morphological phase)")
+                else:
+                    print(f"              (IHC phase)")
+        
+        print("\n" + "="*80 + "\n")
